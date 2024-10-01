@@ -12,6 +12,8 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.ImageView
+import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -30,6 +32,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import java.text.Collator
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -39,6 +42,7 @@ import kotlin.coroutines.suspendCoroutine
 class NerdLauncherActivity :AppCompatActivity() {
 
     private lateinit var recycleView: RecyclerView
+    private lateinit var progressBar: ProgressBar
 
     val launcherForPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {result: Boolean ->
         if (result) {
@@ -53,6 +57,7 @@ class NerdLauncherActivity :AppCompatActivity() {
 
         setContentView(R.layout.activity_nerd_launcher)
         recycleView = findViewById<RecyclerView?>(R.id.recyclerView)
+        progressBar = findViewById(R.id.progressBar)
 
         recycleView.apply {
             recycleView.layoutManager = LinearLayoutManager(this@NerdLauncherActivity)
@@ -78,33 +83,46 @@ class NerdLauncherActivity :AppCompatActivity() {
             action = Intent.ACTION_MAIN
             addCategory(Intent.CATEGORY_LAUNCHER)
         }
-        // 0 参数，表示不打算修改查询结果
-        var activities: List<ResolveInfo> = packageManager.queryIntentActivities(startupIntent, 0)
-        Log.e("WillWolf", "activity: ${activities.size}")
+        lifecycleScope.launch {
+            var activities: List<ResolveInfo>? = null
+            progressBar.visibility = View.VISIBLE
+            launch((Dispatchers.IO)) {
+                // 0 参数，表示不打算修改查询结果
+                activities = packageManager.queryIntentActivities(startupIntent, 0)
+                Log.e("WillWolf", "activity: ${activities?.size}")
 
-        val collator = Collator.getInstance(Locale.CHINA)
-        // ResolveInfo 中可以获取 activity 标签和其他一些元数据
-        // sortedWith 会返回一个新的 List
-        activities = activities.sortedWith(object : Comparator<ResolveInfo> {
+                val collator = Collator.getInstance(Locale.CHINA)
+                // ResolveInfo 中可以获取 activity 标签和其他一些元数据
+                // sortedWith 会返回一个新的 List
+                activities = activities?.sortedWith(object : Comparator<ResolveInfo> {
+
+                    override fun compare(o1: ResolveInfo, o2: ResolveInfo): Int {
+
+                        return collator.compare(o1.loadLabel(packageManager).toString(),
+                            o2.loadLabel(packageManager).toString())
+                    }
+                })
 
 
-            override fun compare(o1: ResolveInfo, o2: ResolveInfo): Int {
-
-                return collator.compare(o1.loadLabel(packageManager).toString(),
-                    o2.loadLabel(packageManager).toString())
             }
-        })
-        val activityAdapter = ActivityAdapter(activities)
-        recycleView.adapter = activityAdapter
+            withContext(Dispatchers.Main) {
+                progressBar.visibility = View.GONE
+                val activityAdapter = activities?.let { ActivityAdapter(it) }
+                recycleView.adapter = activityAdapter
+            }
+        }
     }
 
     // 为 recycleView 写一个 ViewHolder
     private class ActivityHolder(itemView: View): RecyclerView.ViewHolder(itemView), View.OnClickListener {
-        private val tvName = itemView as TextView
+        private var tvLabel: TextView
+        private var iv: ImageView
         private lateinit var resolveInfo: ResolveInfo
 
         init {
             itemView.setOnClickListener(this)
+            tvLabel = itemView.findViewById(R.id.tv_label)
+            iv = itemView.findViewById(R.id.iv_icon)
         }
 
         fun bindActivity(resolveInfo: ResolveInfo) {
@@ -112,7 +130,9 @@ class NerdLauncherActivity :AppCompatActivity() {
             val packageManager = itemView.context.packageManager
             // 获取应用的名称
             val appName = resolveInfo.loadLabel(packageManager)
-            tvName.text = appName
+            tvLabel.text = appName
+            val drawable = resolveInfo.loadIcon(packageManager)
+            iv.setImageDrawable(drawable)
         }
 
         //  按钮点击事件
@@ -121,6 +141,9 @@ class NerdLauncherActivity :AppCompatActivity() {
             // 传入 Intent.ACTION_MAIN ，避免有些应用的启动行为存在不同
             val intent = Intent(Intent.ACTION_MAIN).apply {
                 setClassName(activityInfo.packageName, activityInfo.name)
+                // new Task 让应用属于一个独立的 task，并且如果应用已经运行，再次启动
+                // 也不会创建新的 task
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
             val context = v.context
             context.startActivity(intent)
@@ -129,7 +152,7 @@ class NerdLauncherActivity :AppCompatActivity() {
     // recycleView 的 adapter
     private class ActivityAdapter(val activities: List<ResolveInfo>): RecyclerView.Adapter<ActivityHolder>() {
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ActivityHolder {
-            val view = LayoutInflater.from(parent.context).inflate(android.R.layout.simple_list_item_1, parent, false)
+            val view = LayoutInflater.from(parent.context).inflate(R.layout.item_nerd_launcher, parent, false)
             return ActivityHolder(view)
         }
 
